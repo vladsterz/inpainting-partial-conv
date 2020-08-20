@@ -47,7 +47,8 @@ def style_loss(h_comp, h_out, h_gt, l1):
 # computes TV loss over entire composed image since gradient will not be passed backward to input
 def total_variation_loss(image, l1):
     # shift one pixel and get loss1 difference (for both x and y direction)
-    loss = l1(image[:, :, :, :-1] - image[:, :, :, 1:]) + l1(image[:, :, :-1, :] - image[:, :, 1:, :])
+    #loss = l1(image[:, :, :, :-1] - image[:, :, :, 1:]) + l1(image[:, :, :-1, :] - image[:, :, 1:, :])
+    loss = l1(image[:, :, :, :-1], image[:, :, :, 1:]) + l1(image[:, :, :-1, :], image[:, :, 1:, :])
     return loss
 
 

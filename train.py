@@ -10,7 +10,8 @@ from tensorboardX import SummaryWriter
 from loss import CalculateLoss
 from partial_conv_net import PartialConvUNet
 from places2_train import Places2Data
-
+from structured3D_train import DatasetStructure3D
+from visualization import VisdomVisualizer
 
 class SubsetSampler(data.sampler.Sampler):
 	def __init__(self, start_sample, num_samples):
@@ -38,19 +39,22 @@ if __name__ == '__main__':
 	parser.add_argument("--save_dir", type=str, default="/model")
 	parser.add_argument("--load_model", type=str)
 
-	parser.add_argument("--lr", type=float, default=2e-4)
+	#parser.add_argument("--lr", type=float, default=1e-1)
+	parser.add_argument("--lr", type=float, default=1)
 	parser.add_argument("--fine_tune_lr", type=float, default=5e-5)
-	parser.add_argument("--batch_size", type=int, default=32)
-	parser.add_argument("--epochs", type=int, default=3)
+	parser.add_argument("--batch_size", type=int, default=64)
+	parser.add_argument("--epochs", type=int, default=40)
 	parser.add_argument("--fine_tune", action="store_true")
 	parser.add_argument("--gpu", type=int, default=0)
-	parser.add_argument("--num_workers", type=int, default=32)
+	parser.add_argument("--num_workers", type=int, default=8)
 	parser.add_argument("--log_interval", type=int, default=10)
 	parser.add_argument("--save_interval", type=int, default=5000)
 
 	args = parser.parse_args()
 
 	cwd = os.getcwd()
+
+	viz_base = VisdomVisualizer("inpainting")
 
 	#Tensorboard SummaryWriter setup
 	if not os.path.exists(cwd + args.log_dir):
@@ -66,10 +70,18 @@ if __name__ == '__main__':
 	else:
 		device = torch.device("cpu")
 
-	data_train = Places2Data(args.train_path, args.mask_path)
+	#data_train = Places2Data(args.train_path, args.mask_path)
+	data_train = DatasetStructure3D(r"D:\VCL\Users\vlad\Datasets\Structure3D\Structure3D\Structured3D_reformated")
+	leftover = len(data_train) % args.batch_size
+	data_train.images = data_train.images[:len(data_train) - leftover]
+	data_train.layout = data_train.layout[:len(data_train) - leftover]
+
 	data_size = len(data_train)
+	data_train.num_masks = data_size
 	print("Loaded training dataset with {} samples and {} masks".format(data_size, data_train.num_masks))
 
+
+	
 	assert(data_size % args.batch_size == 0)
 	iters_per_epoch = data_size // args.batch_size
 
@@ -118,10 +130,14 @@ if __name__ == '__main__':
 
 	for epoch in range(0, args.epochs):
 
+		viz = VisdomVisualizer("inpainting_" + str(epoch))
+
 		iterator_train = iter(data.DataLoader(data_train, 
 											batch_size=args.batch_size, 
 											num_workers=args.num_workers, 
-											sampler=SubsetSampler(0, data_size)))
+											#sampler=SubsetSampler(0, data_size),
+											shuffle=True)
+											)
 
 		# TRAINING LOOP
 		print("\nEPOCH:{} of {} - starting training loop from iteration:0 to iteration:{}\n".format(epoch, args.epochs, iters_per_epoch))
@@ -132,11 +148,15 @@ if __name__ == '__main__':
 			model.train()
 
 			# Gets the next batch of images
-			image, mask, gt = [x.to(device) for x in next(iterator_train)]
+			try:
+				image, mask, gt = [x.to(device) for x in next(iterator_train)]
+			except:
+				continue
 			
 			# Forward-propagates images through net
 			# Mask is also propagated, though it is usually gone by the decoding stage
-			output = model(image, mask)
+			output = model(image/255.0, mask)
+			output = torch.sigmoid(output)
 
 			loss_dict = loss_func(image, mask, output, gt)
 			loss = 0.0
@@ -155,8 +175,17 @@ if __name__ == '__main__':
 			# updates the weights
 			optimizer.step()
 
+			if (i + 1) % 20 == 0:
+				viz.show_images(image * 255, "input")
+				viz.show_images(torch.where(mask == 0,output,image ) * 255, "output")
+				
+
+			if (i + 1) % 2 == 0:
+				viz.append_loss(epoch, i + epoch*iters_per_epoch, loss)
+
+
 			# Save model
-			if (i + 1) % args.save_interval == 0 or (i + 1) == iters_per_epoch:
+			if (i + 1) % args.save_interval == 0 or (i) == iters_per_epoch:
 				filename = cwd + args.save_dir + "/model_e{}_i{}.pth".format(epoch, i + 1)
 				state = {"model": model.state_dict(), "optimizer": optimizer.state_dict()}
 				torch.save(state, filename)
